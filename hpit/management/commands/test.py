@@ -13,8 +13,9 @@ class Command:
     
     def run(self, arguments, configuration):
         
-        if "test" not in os.environ['HPIT_ENV']:
-            answer = input("WARNING: 'test' is not found in HPIT_ENV " + os.environ['HPIT_ENV'] + ". Continue anyway? [y/n] ")
+        env = os.environ['HPIT_ENV'] if 'HPIT_ENV' in os.environ else None
+        if not env or 'test' not in env:
+            answer = input("WARNING: 'test' is not found in HPIT_ENV ({}). Continue anyway? [y/n] ".format(env))
             if answer.lower() == "n":
                 return
         
