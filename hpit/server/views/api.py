@@ -120,13 +120,13 @@ def connect():
     #Clear the session
     session.clear()
 
-    entity.connected = True
-
     #Renew Session
     session['entity_name'] = entity.name
     session['entity_description'] = entity.description
     session['entity_id'] = entity_id
     session['token'] = str(uuid.uuid4())
+    
+    entity.connected = True
 
     db.session.add(entity)
     db.session.commit()
@@ -177,6 +177,8 @@ def disconnect():
     #Authenticate
     if not entity.authenticate(api_key):
         return auth_failed_response()
+        
+    entity.connected = False
 
     db.session.add(entity)
     db.session.commit()
@@ -462,8 +464,8 @@ def plugin_message_history():
     return jsonify({'message-history': result})
 
     
-@app.route("/plugin/transaction/history")
-def plugin_transaction_history():
+#@app.route("/plugin/transaction/history")
+#def plugin_transaction_history():
     """
     SUPPORTS: GET
     Lists the messages that were previously sent to the entity.
@@ -477,7 +479,8 @@ def plugin_transaction_history():
         403         - A connection with HPIT must be established first.
         200:OK      - A JSON list of dicts of the messages for this plugin.
     """
-
+    """UNUSED, transactions go with messages
+    
     if 'entity_id' not in session:
         return auth_failed_response()
 
@@ -494,7 +497,7 @@ def plugin_transaction_history():
         } for t in my_messages]
 
     return jsonify({'transaction-history': result})
-
+    """
 
 @app.route("/plugin/message/preview")
 def plugin_message_preview():
@@ -537,8 +540,8 @@ def plugin_message_preview():
     return jsonify({'message-preview': result})
 
 
-@app.route("/plugin/transaction/preview")
-def plugin_transaction_preview():
+#@app.route("/plugin/transaction/preview")
+#def plugin_transaction_preview():
     """
     SUPPORTS: GET
     Lists the messages and transactions queued for a specific plugin. 
@@ -552,6 +555,7 @@ def plugin_transaction_preview():
         403         - A connection with HPIT must be established first.
         200:OK      - A JSON list of dicts of the messages for this plugin.
     """
+    """UNUSED, transactions go with messages
     if 'entity_id' not in session:
         return auth_failed_response()
 
@@ -567,7 +571,7 @@ def plugin_transaction_preview():
         } for t in my_messages]
 
     return jsonify({'transaction-preview': result})
-
+    """
 
 @app.route("/plugin/message/list")
 def plugin_message_list():
@@ -588,14 +592,14 @@ def plugin_message_list():
 
     entity_id = session['entity_id']
 
-    plugin = Plugin.query.filter_by(entity_id=entity_id).first()
+    #plugin = Plugin.query.filter_by(entity_id=entity_id).first()
 
-    if not plugin:
-        return not_found_response()
+    #if not plugin:
+    #    return not_found_response()
 
-    plugin.time_last_polled = datetime.now()
-    db.session.add(plugin)
-    db.session.commit()
+    #plugin.time_last_polled = datetime.now()
+    #db.session.add(plugin)
+    #db.session.commit()
 
     my_messages = mongo.db.plugin_messages.find({
         'receiver_entity_id': entity_id,
@@ -638,7 +642,7 @@ def plugin_message_list():
         })
         
     #remove old messages
-    if random.choice([1,2,3,4,5]) == 1:
+    if random.choice(range(0,100)) == 1:
         yesterday = datetime.now() - timedelta(days=1)
         mongo.db.plugin_messages.remove({
             "time_created": {"$lt":yesterday}
@@ -647,8 +651,8 @@ def plugin_message_list():
     return jsonify({'messages': result})
 
 
-@app.route("/plugin/transaction/list")
-def plugin_transaction_list():
+#@app.route("/plugin/transaction/list")
+#def plugin_transaction_list():
     """
     SUPPORTS: GET
     List the transactions queued for a specific plugin.
@@ -661,19 +665,21 @@ def plugin_transaction_list():
         403         - A connection with HPIT must be established first.
         200:OK      - A JSON list of dicts of the messages for this plugin.
     """
+    
+    """ UNUSED, transactions go with messages
     if 'entity_id' not in session:
         return auth_failed_response()
 
     entity_id = session['entity_id']
 
-    plugin = Plugin.query.filter_by(entity_id=entity_id).first()
+    #plugin = Plugin.query.filter_by(entity_id=entity_id).first()
 
-    if not plugin:
-        return not_found_response()
+    #if not plugin:
+    #    return not_found_response()
 
-    plugin.time_last_polled = datetime.now()
-    db.session.add(plugin)
-    db.session.commit()
+    #plugin.time_last_polled = datetime.now()
+    #db.session.add(plugin)
+    #db.session.commit()
 
     my_messages = mongo.db.plugin_transactions.find({
         'receiver_entity_id': entity_id,
@@ -712,7 +718,7 @@ def plugin_transaction_list():
         })
 
     return jsonify({'transactions': result})
-
+    """
 
 @csrf.exempt
 @app.route("/message", methods=["POST"])
@@ -745,6 +751,8 @@ def message():
         return bad_parameter_response("name")
         
     payload = request.json['payload']
+    if not isinstance(payload,dict):
+        return bad_parameter_response("payload")
 
     message = {
         'sender_entity_id': sender_entity_id,
@@ -820,7 +828,7 @@ def transaction():
     for subscription in subscriptions:
         plugin_entity_id = subscription.plugin.entity_id
 
-        mongo.db.plugin_transactions.insert({
+        mongo.db.plugin_messages.insert({ #used to be plugin_transactions
             'message_id': message_id,
             'sender_entity_id': sender_entity_id,
             'session_token':session["token"],
@@ -903,17 +911,17 @@ def responses():
 
     entity_id = session['entity_id']
 
-    entity = Plugin.query.filter_by(entity_id=entity_id).first()
+    #entity = Plugin.query.filter_by(entity_id=entity_id).first()
 
-    if not entity:
-        entity = Tutor.query.filter_by(entity_id=entity_id).first()
+    #if not entity:
+    #    entity = Tutor.query.filter_by(entity_id=entity_id).first()
 
-    if not entity:
-        return not_found_response()
+    #if not entity:
+    #    return not_found_response()
 
-    entity.time_last_polled = datetime.now()
-    db.session.add(entity)
-    db.session.commit()
+    #entity.time_last_polled = datetime.now()
+    #db.session.add(entity)
+    #db.session.commit()
 
     my_responses = mongo.db.responses.find({
         'receiver_entity_id': entity_id,
@@ -955,10 +963,10 @@ def responses():
         })
         
     #remove old responses
-    if random.choice([1,2,3,4,5]) == 1:
+    if random.choice(range(0,100)) == 1:
         yesterday = datetime.now() - timedelta(days=1)
         mongo.db.responses.remove({
-            "message.time_responded": {"$lt":yesterday}
+            "message.time_received": {"$lt":yesterday}
         })
 
     return jsonify({'responses': result})
@@ -1110,5 +1118,34 @@ def share_resource():
                 db.session.commit()
     
         return ok_response()
+
+@csrf.exempt
+@app.route("/ping",methods=["POST"])
+def ping():
+    """
+    SUPPORTS: POST
+    Tell the server a plugin is still connected.
+
+    Returns: 
+        403         - A connection with HPIT must be established first.
+        200:OK      - All is well
+    """
     
+    if 'entity_id' not in session:
+        return auth_failed_response()
+
+    entity_id = session['entity_id']
     
+    entity = Plugin.query.filter_by(entity_id=entity_id).first()
+    
+    if not entity:
+        entity = Tutor.query.filter_by(entity_id=entity_id).first()
+
+    if not entity:
+        return not_found_response()
+
+    entity.time_last_polled = datetime.now()
+    db.session.add(entity)
+    db.session.commit()
+    
+    return ok_response()

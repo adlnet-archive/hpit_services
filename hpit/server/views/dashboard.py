@@ -2,7 +2,7 @@ import os
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from flask import request, render_template, redirect, url_for
+from flask import request, render_template, redirect, url_for, jsonify
 from flask.ext.user import login_required, current_user
 
 from hpit.server.app import ServerApp
@@ -23,6 +23,7 @@ from bson.objectid import ObjectId
 import bson
 import pymongo
 import math
+import json
 #-----------------------------
 
 #for the message tracker
@@ -37,14 +38,17 @@ class PluginCommunication(object):
         
         self.plugin_received_dt = plugin_received - hpit_received
         
+        self.plugin_used = False
         self.plugin_responded_dt = None
         self.response_received_dt = None
         if plugin_responded:
             self.plugin_responded_dt = plugin_responded - plugin_received
-            self.response_received_dt = response_received - plugin_responded
-            
-            self.total_time = self.plugin_received_dt + self.plugin_responded_dt + self.response_received_dt
-            
+            if response_received:
+                self.plugin_used = True
+                self.response_received_dt = response_received - plugin_responded
+                self.total_time = self.plugin_received_dt + self.plugin_responded_dt + self.response_received_dt
+            else:
+                self.total_time = self.plugin_received_dt + self.plugin_responded_dt
         else:
              self.total_time = self.plugin_received_dt
             
@@ -56,14 +60,21 @@ class MessageTimes(object):
         self.message_name = None        
         self.message_id = message_id
         
-        mongo = MongoClient(settings.MONGODB_URI)
-        self.db = mongo[server_settings.MONGO_DBNAME]
+        self.mongo = MongoClient(settings.MONGODB_URI)
+        self.db = self.mongo[server_settings.MONGO_DBNAME]
         
-    def get(self):
+    def get(self): #used for message tracking
         orig_message = self.db.messages_and_transactions.find_one({"_id":ObjectId(self.message_id)})
-        self.hpit_received = orig_message["time_created"]
+        self.hpit_received = orig_message["time_created"].replace(tzinfo=None)
         self.message_name = orig_message["message_name"]
+        self.get_plugin_connections()
     
+    def get_from_existing_query(self,time_created,message_name):
+        self.hpit_received = time_created.replace(tzinfo=None)
+        self.message_name = message_name
+        self.get_plugin_connections()
+        
+    def get_plugin_connections(self):
         messages_received_by_plugins = self.db.sent_messages_and_transactions.find({"message_id":ObjectId(self.message_id)})
         for message in messages_received_by_plugins:
             time_responded = None
@@ -140,10 +151,9 @@ def index():
     SUPPORTS: GET
     Shows the main page for HPIT.
     """
-    active_poll_time = datetime.now() - timedelta(minutes=3)
-
-    plugins = list(Plugin.query.filter(Plugin.time_last_polled >= active_poll_time))
-    tutors = list(Tutor.query.filter(Tutor.time_last_polled >= active_poll_time))
+    last_poll_time = datetime.now() - timedelta(minutes=1)
+    plugins = list(Plugin.query.filter(Plugin.time_last_polled >= last_poll_time))
+    tutors = list(Tutor.query.filter(Tutor.time_last_polled >= last_poll_time))
 
     messages_created = query_metrics(mongo.db.plugin_messages, 'time_created')
     messages_received = query_metrics(mongo.db.sent_messages_and_transactions, 'time_received')
@@ -210,9 +220,9 @@ def plugins():
     plugins = current_user.plugins
     
     connected_dict = {}
+    last_poll_time = datetime.now() - timedelta(minutes=1)
     for p in plugins:
-        active_poll_time = datetime.now() - timedelta(minutes=1)
-        if p.time_last_polled >= active_poll_time:
+        if p.time_last_polled >= last_poll_time:
             connected_dict[p.id] = True
         else:
             connected_dict[p.id] = False
@@ -268,8 +278,8 @@ def plugin_detail(plugin_id):
     })
 
     connected_dict = {}
-    active_poll_time = datetime.now() - timedelta(minutes=1)
-    if plugin.time_last_polled >= active_poll_time:
+    last_poll_time = datetime.now() - timedelta(minutes=1)
+    if plugin.time_last_polled >= last_poll_time:
         connected_dict[plugin.id] = True
     else:
         connected_dict[plugin.id] = False
@@ -378,9 +388,9 @@ def tutors():
     tutors = current_user.tutors
     
     connected_dict = {}
+    last_poll_time = datetime.now() - timedelta(minutes=1)
     for t in tutors:
-        active_poll_time = datetime.now() - timedelta(minutes=1)
-        if t.time_last_polled >= active_poll_time:
+        if t.time_last_polled >= last_poll_time:
             connected_dict[t.id] = True
         else:
             connected_dict[t.id] = False
@@ -435,8 +445,8 @@ def tutor_detail(tutor_id):
     })
 
     connected_dict = {}
-    active_poll_time = datetime.now() - timedelta(minutes=1)
-    if tutor.time_last_polled >= active_poll_time:
+    last_poll_time = datetime.now() - timedelta(minutes=1)
+    if tutor.time_last_polled >= last_poll_time:
         connected_dict[tutor.id] = True
     else:
         connected_dict[tutor.id] = False
@@ -564,10 +574,10 @@ def account_details():
     plugins = current_user.plugins
     tutors = current_user.tutors
 
-    active_poll_time = datetime.now() - timedelta(minutes=15)
-
-    active_plugins = list(filter(lambda x: x.time_last_polled >= active_poll_time, plugins))
-    active_tutors = list(filter(lambda x: x.time_last_polled >= active_poll_time, tutors))
+    last_poll_time = datetime.now() - timedelta(minutes=1)
+    
+    active_plugins = list(filter(lambda x: x.time_last_polled >= last_poll_time, plugins))
+    active_tutors = list(filter(lambda x: x.time_last_polled >= last_poll_time, tutors))
 
     senders = list(map(lambda x: x.entity_id, tutors))
     receivers = list(map(lambda x: x.entity_id, plugins))
@@ -762,3 +772,103 @@ def message_tracker(message_id=""):
     else:
         return render_template('message_tracker.html')
 
+
+@csrf.exempt
+@app.route('/detailed-report',methods=["GET","POST"])
+@login_required
+def detailed_report():
+    if request.method == "GET":
+        return render_template('detailed_report_start.html')
+    else:
+        
+        try:
+            report_start = datetime.now()
+            
+            start_time = request.form["start_time"]
+            end_time = request.form["end_time"]
+            try:
+                start_year = int(start_time[:4])
+                start_month = int(start_time[4:6])
+                start_day = int(start_time[6:])
+                end_year = int(end_time[:4])
+                end_month = int(end_time[4:6])
+                end_day = int(end_time[6:])
+            except Exception as e:
+                #return jsonify({"rows":[], "report_time":-1,"error":str(e)})
+                return render_template("detailed_report.html",
+                    error=str(e),
+                    report_json=json.dumps({"rows":[]}),
+                    report_time=-1,
+                    start_time=start_time,
+                    end_time=end_time
+                )
+                
+            rows = []
+            end_day = datetime(end_year,end_month,end_day)
+            current_day = datetime(start_year,start_month,start_day)
+            one_day = timedelta(days=1)
+            two_hours = timedelta(hours=2)
+            
+            idx = mongo.db.sent_responses.create_index("message.time_created")
+            
+            while current_day < end_day:
+                print(str(current_day))
+                date_string = datetime.strftime(current_day,"%m/%d %I%p")
+                
+                responses = mongo.db.sent_responses.find({
+                        "message.time_created":{
+                            "$gt":current_day,
+                            "$lt":current_day + two_hours
+                         },
+                         "message.message_name":{ 
+                             "$nin":[
+                                 "carnegie_learning.eq_ping",
+                                 "carnegie_learning.survey_ping",
+                                 "carnegie_learning.akira_ping",
+                                 "carnegie_learning.pulse",
+                            ]
+                         } 
+                })
+                
+                total_responses = responses.count() 
+                    
+                total_time = timedelta()
+                for r in responses:
+                    time = r["time_response_received"] - r["message"]["time_created"]
+                    total_time += time
+                
+                if total_responses>0:
+                    avg = total_time.seconds / total_responses
+                else:
+                    avg = 0
+                
+                if total_responses > 500:
+                    rows.append((date_string,int(total_responses),float((total_responses/2)/60), float(avg)))
+                else:
+                    rows.append((date_string,int(total_responses),None,float(avg)))
+                
+                current_day = current_day + two_hours
+                
+            report_end = datetime.now()
+            report_time = ((report_end-report_start).seconds) / 60
+            
+            mongo.db.sent_responses.drop_index(idx)
+            
+            #return jsonify({"rows":rows,"report_time":report_time})
+            return render_template("detailed_report.html",
+                    error=None,
+                    report_json=json.dumps({"rows":rows}),
+                    report_time=report_time,
+                    start_time=start_time,
+                    end_time=end_time
+                )
+            
+        except Exception as e:
+            #return jsonify({"rows":[], "report_time":-1,"error":str(e)})
+            return render_template("detailed_report.html",
+                    error=str(e),
+                    report_json=json.dumps({"rows":[]}),
+                    report_time=-1,
+                    start_time=start_time,
+                    end_time=end_time
+                )
